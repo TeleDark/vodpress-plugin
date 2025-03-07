@@ -1,0 +1,29 @@
+.vodpress-container {
+    padding: 20px;
+}
+
+.vodpress-form-section {
+    margin-bottom: 20px;
+}
+
+.vodpress-status-pending {
+    color: #666;
+    font-weight: bold;
+}
+
+.vodpress-status-downloading,
+.vodpress-status-converting,
+.vodpress-status-uploading {
+    color: #0073aa;
+    font-weight: bold;
+}
+
+.vodpress-status-completed {
+    color: #46b450;
+    font-weight: bold;
+}
+
+.vodpress-status-failed {
+    color: #dc3232;
+    font-weight: bold;
+}

@@ -28,7 +28,8 @@ class VODPress {
     }
 
     private function init_plugin(): void {
-        $api_key = get_option('vodpress_api_key');
+        // Get API key from wp-config.php instead of options table
+        $api_key = defined('VODPRESS_API_KEY') ? VODPRESS_API_KEY : null;
         $server_url = get_option('vodpress_server_url');
         
         if ($api_key && $server_url) {
@@ -60,7 +61,7 @@ class VODPress {
     }
 
     public function register_settings(): void {
-        register_setting('vodpress_settings', 'vodpress_api_key', ['sanitize_callback' => 'sanitize_text_field']);
+        // API key is now managed in wp-config.php
         register_setting('vodpress_settings', 'vodpress_server_url', ['sanitize_callback' => 'esc_url_raw']);
         register_setting('vodpress_settings', 'vodpress_public_url_base', ['sanitize_callback' => 'esc_url_raw']);
     }
@@ -113,20 +114,34 @@ class VODPress {
         ?>
         <div class="wrap vodpress-container">
             <h1><?php _e('VODPress', 'vodpress'); ?></h1>
+            
+            <?php if (!defined('VODPRESS_API_KEY')): ?>
+                <div class="notice notice-error">
+                    <p>
+                        <strong><?php _e('API Key Missing', 'vodpress'); ?>:</strong> 
+                        <?php _e('Please define your API key in wp-config.php by adding this line:', 'vodpress'); ?>
+                        <br>
+                        <code>define('VODPRESS_API_KEY', 'your-api-key-here');</code>
+                        <br>
+                        <?php _e('Video conversion will not work until the API key is properly configured.', 'vodpress'); ?>
+                    </p>
+                </div>
+            <?php endif; ?>
+            
             <div class="vodpress-form-section">
                 <h2><?php _e('Submit Video', 'vodpress'); ?></h2>
-                <form id="vodpress-submit-form">
+                <form id="vodpress-submit-form" <?php echo !defined('VODPRESS_API_KEY') ? 'disabled' : ''; ?>>
                     <table class="form-table">
                         <tr>
                             <th><label for="video_url"><?php _e('Video URL', 'vodpress'); ?></label></th>
                             <td>
-                                <input type="url" name="video_url" id="video_url" class="regular-text" required>
+                                <input type="url" name="video_url" id="video_url" class="regular-text" required <?php echo !defined('VODPRESS_API_KEY') ? 'disabled' : ''; ?>>
                                 <p class="description"><?php _e('Enter the URL of the video you want to convert', 'vodpress'); ?></p>
                             </td>
                         </tr>
                     </table>
                     <p class="submit">
-                        <input type="submit" class="button button-primary" value="<?php _e('Submit Video', 'vodpress'); ?>">
+                        <input type="submit" class="button button-primary" value="<?php _e('Submit Video', 'vodpress'); ?>" <?php echo !defined('VODPRESS_API_KEY') ? 'disabled' : ''; ?>>
                     </p>
                 </form>
                 <div id="vodpress-submit-status"></div>
@@ -147,11 +162,16 @@ class VODPress {
                 ?>
                 <table class="form-table">
                     <tr>
-                        <th><label for="vodpress_api_key"><?php _e('API Key', 'vodpress'); ?></label></th>
+                        <th><label><?php _e('API Key', 'vodpress'); ?></label></th>
                         <td>
-                            <input type="password" name="vodpress_api_key" id="vodpress_api_key" 
-                                   value="<?php echo esc_attr(get_option('vodpress_api_key')); ?>" class="regular-text">
-                            <p class="description"><?php _e('API key for authentication with conversion server', 'vodpress'); ?></p>
+                            <?php if (defined('VODPRESS_API_KEY')): ?>
+                                <p><span class="dashicons dashicons-yes-alt" style="color: green;"></span> 
+                                <?php _e('API key is defined in wp-config.php', 'vodpress'); ?></p>
+                            <?php else: ?>
+                                <p><span class="dashicons dashicons-warning" style="color: red;"></span> 
+                                <?php _e('API key is not defined. Add the following line to your wp-config.php file:', 'vodpress'); ?></p>
+                                <code>define('VODPRESS_API_KEY', 'your-api-key-here');</code>
+                            <?php endif; ?>
                         </td>
                     </tr>
                     <tr>
@@ -217,14 +237,29 @@ class VODPress {
     public function ajax_submit_video(): void {
         check_ajax_referer('vodpress_nonce', 'nonce');
         
+        // Check if API key is defined
+        if (!defined('VODPRESS_API_KEY')) {
+            wp_send_json_error(['message' => __('API key is not defined in wp-config.php', 'vodpress')]);
+            return;
+        }
+        
+        // Check if server URL is configured
+        $server_url = get_option('vodpress_server_url');
+        if (empty($server_url)) {
+            wp_send_json_error(['message' => __('Server URL is not configured', 'vodpress')]);
+            return;
+        }
+        
         $video_url = sanitize_text_field($_POST['video_url'] ?? '');
         if (empty($video_url)) {
             wp_send_json_error(['message' => __('Video URL is required', 'vodpress')]);
+            return;
         }
 
         $result = $this->send_video($video_url);
         if (is_wp_error($result)) {
             wp_send_json_error(['message' => $result->get_error_message()]);
+            return;
         }
 
         wp_send_json_success(['message' => __('Video submitted successfully!', 'vodpress')]);
@@ -235,7 +270,12 @@ class VODPress {
      */
     private function send_video(string $video_url) {
         if (!$this->api_client) {
-            return new WP_Error('configuration_error', __('Plugin not properly configured', 'vodpress'));
+            // Reinitialize API client if not available
+            if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
+                $this->api_client = new VODPressAPIClient(VODPRESS_API_KEY, get_option('vodpress_server_url'));
+            } else {
+                return new WP_Error('configuration_error', __('Plugin not properly configured. Please check API key and server URL.', 'vodpress'));
+            }
         }
 
         $validation_result = $this->validate_video_url($video_url);
@@ -260,7 +300,7 @@ class VODPress {
 
         $result = $this->api_client->send_video_request($video_url, $video_id);
         if (is_wp_error($result)) {
-            $wpdb->update($table_name, ['status' => 'pending', 'updated_at' => current_time('mysql')], ['id' => $video_id]);
+            $wpdb->update($table_name, ['status' => 'failed', 'error_message' => $result->get_error_message(), 'updated_at' => current_time('mysql')], ['id' => $video_id]);
             return $result;
         }
 
@@ -325,7 +365,14 @@ class VODPress {
             wp_send_json_error(['message' => __('Video not found', 'vodpress')]);
         }
 
-        $result = $this->send_video($video->video_url);
+        // For pending videos, just retry with the same ID
+        if ($video->status === 'pending') {
+            $result = $this->retry_pending_video($video);
+        } else {
+            // For failed videos, create a new record
+            $result = $this->send_video($video->video_url);
+        }
+
         if (is_wp_error($result)) {
             wp_send_json_error(['message' => $result->get_error_message()]);
         }
@@ -333,10 +380,76 @@ class VODPress {
         wp_send_json_success(['message' => __('Video retry submitted successfully!', 'vodpress')]);
     }
 
+    /**
+     * Retry a pending video without creating a new record
+     * 
+     * @param object $video The video object from the database
+     * @return WP_Error|object
+     */
+    private function retry_pending_video($video) {
+        if (!$this->api_client) {
+            // Reinitialize API client if not available
+            if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
+                $this->api_client = new VODPressAPIClient(VODPRESS_API_KEY, get_option('vodpress_server_url'));
+            } else {
+                return new WP_Error('configuration_error', __('Plugin not properly configured. Please check API key and server URL.', 'vodpress'));
+            }
+        }
+
+        // Update the updated_at timestamp
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'vodpress_videos';
+        $wpdb->update(
+            $table_name, 
+            ['updated_at' => current_time('mysql')], 
+            ['id' => $video->id]
+        );
+
+        // Send the request with the existing video ID
+        $result = $this->api_client->send_video_request($video->video_url, $video->id);
+        if (is_wp_error($result)) {
+            $wpdb->update(
+                $table_name, 
+                [
+                    'status' => 'failed', 
+                    'error_message' => $result->get_error_message(), 
+                    'updated_at' => current_time('mysql')
+                ], 
+                ['id' => $video->id]
+            );
+            return $result;
+        }
+
+        return $result;
+    }
+
+    public function ajax_delete_video(): void {
+        check_ajax_referer('vodpress_nonce', 'nonce');
+        
+        $video_id = intval($_POST['video_id'] ?? 0);
+        if (!$video_id) {
+            wp_send_json_error(['message' => __('Invalid video ID', 'vodpress')]);
+        }
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'vodpress_videos';
+        
+        $result = $wpdb->delete($table_name, ['id' => $video_id]);
+        
+        if ($result === false) {
+            wp_send_json_error(['message' => __('Failed to delete video', 'vodpress')]);
+        }
+        
+        wp_send_json_success(['message' => __('Video deleted successfully', 'vodpress')]);
+    }
+
+    
     public function handle_conversion_callback(WP_REST_Request $request): array|WP_Error {
         $provided_hash = $request->get_header('X-API-Key-Hash');
-        $stored_api_key = get_option('vodpress_api_key');
-        if (!$provided_hash || $provided_hash !== hash('sha256', $stored_api_key)) {
+        $stored_api_key = defined('VODPRESS_API_KEY') ? VODPRESS_API_KEY : '';
+        $expected_hash = hash('sha256', $stored_api_key);
+        
+        if (!$provided_hash || !hash_equals($expected_hash, $provided_hash)) {
             return new WP_Error('unauthorized', 'Invalid API key hash', ['status' => 401]);
         }
 

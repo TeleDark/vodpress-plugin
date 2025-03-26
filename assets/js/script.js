@@ -24,7 +24,7 @@ jQuery(document).ready(function ($) {
                         : '<div class="notice notice-error"><p>' + (response.data.message || vodpress.i18n.submitError) + '</p></div>'
                 );
                 if (response.success) {
-                    setTimeout(function () { $status.empty(); updateVideosStatus(); }, 2000); // آپدیت جدول بعد از موفقیت
+                    setTimeout(function () { $status.empty(); updateVideosStatus(); }, 2000);
                 }
             },
             error: function () {
@@ -66,10 +66,16 @@ jQuery(document).ready(function ($) {
 
         videos.forEach(function (video) {
             var actions = '';
-            if (video.status === 'failed' || video.status === 'pending') {
-                actions = '<button class="button button-small vodpress-retry" data-video-id="' + video.id + '">Retry</button>';
+            if (video.status === 'failed') {
+                actions = '<button class="button button-small vodpress-retry" data-video-id="' + video.id + '">Retry</button> ';
+                actions += '<button class="button button-small vodpress-delete" data-video-id="' + video.id + '">Delete</button>';
             } else if (video.status === 'completed' && video.conversion_url) {
-                actions = '<button class="button button-small vodpress-copy-url" data-url="' + video.conversion_url + '">Copy URL</button>';
+                actions = '<button class="button button-small vodpress-copy-url" data-url="' + video.conversion_url + '">Copy URL</button> ';
+            } else if (video.status === 'pending') {
+                actions = '<button class="button button-small vodpress-retry" data-video-id="' + video.id + '">Retry</button> ';
+                actions += '<button class="button button-small vodpress-delete" data-video-id="' + video.id + '">Delete</button>';
+            } else {
+                actions = ''; 
             }
 
             var errorMessage = video.error_message ? '<br><small style="color: #dc3232;">' + video.error_message + '</small>' : '';
@@ -126,6 +132,37 @@ jQuery(document).ready(function ($) {
                     $button.prop('disabled', false).text('Retry');
                 }
             });
+        });
+
+        $('.vodpress-delete').off('click').on('click', function() {
+            if (confirm('Are you sure you want to delete this video?')) {
+                var videoId = $(this).data('video-id');
+                var $button = $(this);
+                $button.prop('disabled', true).text('Deleting...');
+                
+                $.ajax({
+                    url: vodpress.ajaxUrl,
+                    type: 'POST',
+                    data: {
+                        action: 'vodpress_delete_video',
+                        nonce: vodpress.nonce,
+                        video_id: videoId
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $('#vodpress-submit-status').html('<div class="notice notice-success"><p>' + response.data.message + '</p></div>');
+                            setTimeout(function() { $('#vodpress-submit-status').empty(); updateVideosStatus(); }, 2000);
+                        } else {
+                            $('#vodpress-submit-status').html('<div class="notice notice-error"><p>' + (response.data.message || 'Unknown error') + '</p></div>');
+                            $button.prop('disabled', false).text('Delete');
+                        }
+                    },
+                    error: function() {
+                        $('#vodpress-submit-status').html('<div class="notice notice-error"><p>Failed to delete video</p></div>');
+                        $button.prop('disabled', false).text('Delete');
+                    }
+                });
+            }
         });
     }
 

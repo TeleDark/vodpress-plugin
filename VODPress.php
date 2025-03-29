@@ -54,6 +54,8 @@ class VODPress {
         add_action('wp_ajax_vodpress_submit_video', [$this, 'ajax_submit_video']);
         add_action('wp_ajax_vodpress_get_videos_status', [$this, 'ajax_get_videos_status']);
         add_action('wp_ajax_vodpress_retry_video', [$this, 'ajax_retry_video']);
+        add_action('wp_ajax_vodpress_delete_video', [$this, 'ajax_delete_video']);
+
     }
 
     public function load_textdomain(): void {
@@ -133,6 +135,13 @@ class VODPress {
                 <form id="vodpress-submit-form" <?php echo !defined('VODPRESS_API_KEY') ? 'disabled' : ''; ?>>
                     <table class="form-table">
                         <tr>
+                            <th><label for="video_title"><?php _e('Video Title', 'vodpress'); ?></label></th>
+                            <td>
+                                <input type="text" name="video_title" id="video_title" class="regular-text" required <?php echo !defined('VODPRESS_API_KEY') ? 'disabled' : ''; ?>>
+                                <p class="description"><?php _e('Enter a title for this video', 'vodpress'); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
                             <th><label for="video_url"><?php _e('Video URL', 'vodpress'); ?></label></th>
                             <td>
                                 <input type="url" name="video_url" id="video_url" class="regular-text" required <?php echo !defined('VODPRESS_API_KEY') ? 'disabled' : ''; ?>>
@@ -200,10 +209,20 @@ class VODPress {
         ?>
         <div class="vodpress-videos-section">
             <h2><?php _e('Recent Conversions', 'vodpress'); ?></h2>
+            
+            <div class="tablenav top">
+                <div class="alignleft actions">
+                    <input type="text" id="vodpress-search" placeholder="<?php _e('Search by title...', 'vodpress'); ?>" class="regular-text">
+                    <button id="vodpress-search-button" class="button"><?php _e('Search', 'vodpress'); ?></button>
+                    <button id="vodpress-clear-search" class="button"><?php _e('Clear', 'vodpress'); ?></button>
+                </div>
+            </div>
+            
             <table class="wp-list-table widefat fixed striped">
                 <thead>
                     <tr>
                         <th><?php _e('ID', 'vodpress'); ?></th>
+                        <th><?php _e('Title', 'vodpress'); ?></th>
                         <th><?php _e('Video URL', 'vodpress'); ?></th>
                         <th><?php _e('Status', 'vodpress'); ?></th>
                         <th><?php _e('Created At', 'vodpress'); ?></th>
@@ -251,12 +270,19 @@ class VODPress {
         }
         
         $video_url = sanitize_text_field($_POST['video_url'] ?? '');
+        $video_title = sanitize_text_field($_POST['video_title'] ?? '');
+        
         if (empty($video_url)) {
             wp_send_json_error(['message' => __('Video URL is required', 'vodpress')]);
             return;
         }
+        
+        if (empty($video_title)) {
+            wp_send_json_error(['message' => __('Video title is required', 'vodpress')]);
+            return;
+        }
 
-        $result = $this->send_video($video_url);
+        $result = $this->send_video($video_url, $video_title);
         if (is_wp_error($result)) {
             wp_send_json_error(['message' => $result->get_error_message()]);
             return;
@@ -266,9 +292,11 @@ class VODPress {
     }
 
     /**
+     * @param string $video_url
+     * @param string $video_title
      * @return WP_Error|object
      */
-    private function send_video(string $video_url) {
+    private function send_video(string $video_url, string $video_title = '') {
         if (!$this->api_client) {
             // Reinitialize API client if not available
             if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
@@ -288,6 +316,7 @@ class VODPress {
 
         $wpdb->insert($table_name, [
             'video_url' => $video_url,
+            'title' => $video_title,
             'status' => 'pending',
             'created_at' => current_time('mysql'),
             'updated_at' => current_time('mysql')
@@ -330,12 +359,24 @@ class VODPress {
 
         global $wpdb;
         $table_name = $wpdb->prefix . 'vodpress_videos';
-        $videos = $wpdb->get_results("SELECT * FROM $table_name ORDER BY created_at DESC");
+        
+        // Check if we have a search query
+        $search_term = isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '';
+        
+        if (!empty($search_term)) {
+            $videos = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table_name WHERE title LIKE %s ORDER BY created_at DESC",
+                '%' . $wpdb->esc_like($search_term) . '%'
+            ));
+        } else {
+            $videos = $wpdb->get_results("SELECT * FROM $table_name ORDER BY created_at DESC");
+        }
 
         $video_data = [];
         foreach ($videos as $video) {
             $video_data[] = [
                 'id' => $video->id,
+                'title' => $video->title,
                 'video_url' => $video->video_url,
                 'status' => $video->status,
                 'status_label' => $this->get_status_label($video->status),
@@ -365,13 +406,8 @@ class VODPress {
             wp_send_json_error(['message' => __('Video not found', 'vodpress')]);
         }
 
-        // For pending videos, just retry with the same ID
-        if ($video->status === 'pending') {
-            $result = $this->retry_pending_video($video);
-        } else {
-            // For failed videos, create a new record
-            $result = $this->send_video($video->video_url);
-        }
+        // For both "pending" and "failed" statuses, use the existing record
+        $result = $this->retry_existing_video($video);
 
         if (is_wp_error($result)) {
             wp_send_json_error(['message' => $result->get_error_message()]);
@@ -381,12 +417,12 @@ class VODPress {
     }
 
     /**
-     * Retry a pending video without creating a new record
+     * Retry an existing video without creating a new record
      * 
      * @param object $video The video object from the database
      * @return WP_Error|object
      */
-    private function retry_pending_video($video) {
+    private function retry_existing_video($video) {
         if (!$this->api_client) {
             // Reinitialize API client if not available
             if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
@@ -396,12 +432,16 @@ class VODPress {
             }
         }
 
-        // Update the updated_at timestamp
+        // Update the status and updated_at timestamp
         global $wpdb;
         $table_name = $wpdb->prefix . 'vodpress_videos';
         $wpdb->update(
             $table_name, 
-            ['updated_at' => current_time('mysql')], 
+            [
+                'status' => 'pending', // reset status to pending
+                'error_message' => null, // clear error message
+                'updated_at' => current_time('mysql')
+            ], 
             ['id' => $video->id]
         );
 
@@ -572,6 +612,7 @@ register_activation_hook(__FILE__, function() {
     $sql = "CREATE TABLE IF NOT EXISTS $table_name (
         id bigint(20) NOT NULL AUTO_INCREMENT,
         video_url text NOT NULL,
+        title varchar(255) DEFAULT '',
         status varchar(50) NOT NULL DEFAULT 'pending',
         conversion_url text,
         error_message text,

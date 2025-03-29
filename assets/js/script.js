@@ -1,5 +1,6 @@
 jQuery(document).ready(function ($) {
     let lastVideosState = []; // Store the last known state of videos
+    let searchTerm = ''; // Store the current search term
 
     // Handle form submission
     $('#vodpress-submit-form').on('submit', function (e) {
@@ -15,7 +16,8 @@ jQuery(document).ready(function ($) {
             data: {
                 action: 'vodpress_submit_video',
                 nonce: vodpress.nonce,
-                video_url: $form.find('#video_url').val()
+                video_url: $form.find('#video_url').val(),
+                video_title: $form.find('#video_title').val()
             },
             success: function (response) {
                 $status.html(
@@ -24,6 +26,8 @@ jQuery(document).ready(function ($) {
                         : '<div class="notice notice-error"><p>' + (response.data.message || vodpress.i18n.submitError) + '</p></div>'
                 );
                 if (response.success) {
+                    $form.find('#video_url').val('');
+                    $form.find('#video_title').val('');
                     setTimeout(function () { $status.empty(); updateVideosStatus(); }, 2000);
                 }
             },
@@ -33,6 +37,28 @@ jQuery(document).ready(function ($) {
         });
     });
 
+    // Handle search
+    $('#vodpress-search-button').on('click', function() {
+        searchTerm = $('#vodpress-search').val();
+        updateVideosStatus();
+    });
+    
+    // Handle search clear
+    $('#vodpress-clear-search').on('click', function() {
+        $('#vodpress-search').val('');
+        searchTerm = '';
+        updateVideosStatus();
+    });
+    
+    // Handle pressing Enter in search field
+    $('#vodpress-search').on('keypress', function(e) {
+        if (e.which === 13) {
+            e.preventDefault();
+            searchTerm = $(this).val();
+            updateVideosStatus();
+        }
+    });
+
     // Automatically update video statuses
     function updateVideosStatus() {
         $.ajax({
@@ -40,7 +66,8 @@ jQuery(document).ready(function ($) {
             type: 'POST',
             data: {
                 action: 'vodpress_get_videos_status',
-                nonce: vodpress.nonce
+                nonce: vodpress.nonce,
+                search: searchTerm
             },
             success: function (response) {
                 if (response.success && JSON.stringify(response.data) !== JSON.stringify(lastVideosState)) {
@@ -60,7 +87,7 @@ jQuery(document).ready(function ($) {
         $tbody.empty();
 
         if (!videos || videos.length === 0) {
-            $tbody.append('<tr><td colspan="7">No videos found.</td></tr>');
+            $tbody.append('<tr><td colspan="8">No videos found.</td></tr>');
             return;
         }
 
@@ -83,6 +110,7 @@ jQuery(document).ready(function ($) {
             $tbody.append(
                 '<tr>' +
                 '<td>' + video.id + '</td>' +
+                '<td>' + video.title + '</td>' +
                 '<td><a href="' + video.video_url + '" target="_blank">' + video.video_url.substring(0, 50) + (video.video_url.length > 50 ? '...' : '') + '</a></td>' +
                 '<td><span class="vodpress-status-' + video.status + '">' + video.status_label + '</span>' + errorMessage + '</td>' +
                 '<td>' + video.created_at + '</td>' +
@@ -157,8 +185,9 @@ jQuery(document).ready(function ($) {
                             $button.prop('disabled', false).text('Delete');
                         }
                     },
-                    error: function() {
-                        $('#vodpress-submit-status').html('<div class="notice notice-error"><p>Failed to delete video</p></div>');
+                    error: function(xhr, status, error) {
+                        console.error('Ajax error:', status, error);
+                        $('#vodpress-submit-status').html('<div class="notice notice-error"><p>Failed to delete video: ' + error + '</p></div>');
                         $button.prop('disabled', false).text('Delete');
                     }
                 });

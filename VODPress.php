@@ -94,10 +94,17 @@ class VODPress {
         }
 
         $css_version = filemtime(plugin_dir_path(__FILE__) . 'assets/css/style.css');
+        $css_player = filemtime(plugin_dir_path(__FILE__) . 'assets/css/player.css');
+
         $js_version = filemtime(plugin_dir_path(__FILE__) . 'assets/js/script.js');
 
         wp_enqueue_style('vodpress-styles', plugins_url('assets/css/style.css', __FILE__), [], $css_version);
         wp_enqueue_script('vodpress-script', plugins_url('assets/js/script.js', __FILE__), ['jquery'], $js_version, true);
+        
+        // add vidstack player
+        wp_enqueue_style('vidstack-player-css', plugins_url('assets/css/player.css', __FILE__), [], $css_player);
+        wp_enqueue_style('vidstack-plyr-css', 'https://cdn.vidstack.io/plyr.css');
+        wp_enqueue_script('vidstack-player-js', 'https://cdn.vidstack.io/player.js', [], null, true);
 
         wp_localize_script('vodpress-script', 'vodpress', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
@@ -105,7 +112,8 @@ class VODPress {
             'i18n' => [
                 'submitError' => __('Failed to submit video', 'vodpress'),
                 'submitSuccess' => __('Video submitted successfully!', 'vodpress'),
-            ]
+            ],
+            'pluginUrl' => plugins_url('', __FILE__),
         ]);
     }
 
@@ -156,6 +164,14 @@ class VODPress {
                 <div id="vodpress-submit-status"></div>
             </div>
             <?php $this->display_videos_table(); ?>
+            
+            <div id="vodpress-video-modal" class="vodpress-modal">
+                <div class="vodpress-modal-content">
+                    <span class="vodpress-close">&times;</span>
+                    <h2 id="vodpress-video-title"></h2>
+                    <div id="vodpress-video-player"></div>
+                </div>
+            </div>
         </div>
         <?php
     }

@@ -1,6 +1,7 @@
 jQuery(document).ready(function ($) {
     let lastVideosState = []; // Store the last known state of videos
     let searchTerm = ''; // Store the current search term
+    let searchTimeout = null;
 
     // Handle form submission
     $('#vodpress-submit-form').on('submit', function (e) {
@@ -37,27 +38,18 @@ jQuery(document).ready(function ($) {
         });
     });
 
-    // Handle search
-    $('#vodpress-search-button').on('click', function() {
-        searchTerm = $('#vodpress-search').val();
-        updateVideosStatus();
-    });
+    $('#vodpress-search-button, #vodpress-clear-search').off('click');
     
-    // Handle search clear
-    $('#vodpress-clear-search').on('click', function() {
-        $('#vodpress-search').val('');
-        searchTerm = '';
-        updateVideosStatus();
-    });
-    
-    // Handle pressing Enter in search field
-    $('#vodpress-search').on('keypress', function(e) {
-        if (e.which === 13) {
-            e.preventDefault();
-            searchTerm = $(this).val();
+    $('#vodpress-search').on('input', function() {
+        clearTimeout(searchTimeout);
+  
+        searchTimeout = setTimeout(function() {
+            searchTerm = $('#vodpress-search').val();
             updateVideosStatus();
-        }
+        }, 500);
     });
+    
+    $('#vodpress-search').off('keypress');
 
     // Automatically update video statuses
     function updateVideosStatus() {

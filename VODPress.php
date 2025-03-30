@@ -229,8 +229,6 @@ class VODPress {
             <div class="tablenav top">
                 <div class="alignleft actions">
                     <input type="text" id="vodpress-search" placeholder="<?php _e('Search by title...', 'vodpress'); ?>" class="regular-text">
-                    <button id="vodpress-search-button" class="button"><?php _e('Search', 'vodpress'); ?></button>
-                    <button id="vodpress-clear-search" class="button"><?php _e('Clear', 'vodpress'); ?></button>
                 </div>
             </div>
             

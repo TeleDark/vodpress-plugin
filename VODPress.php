@@ -485,9 +485,34 @@ class VODPress {
             wp_send_json_error(['message' => __('Invalid video ID', 'vodpress')]);
         }
 
+        // Get video information before deletion
         global $wpdb;
         $table_name = $wpdb->prefix . 'vodpress_videos';
-        
+        $video = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $video_id));
+
+        if (!$video) {
+            wp_send_json_error(['message' => __('Video not found', 'vodpress')]);
+        }
+
+        // Delete from S3 if video has been converted
+        if ($video->status === 'completed' && $video->conversion_url) {
+            if (!$this->api_client) {
+                if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
+                    $this->api_client = new VODPressAPIClient(VODPRESS_API_KEY, get_option('vodpress_server_url'));
+                } else {
+                    wp_send_json_error(['message' => __('Plugin not properly configured', 'vodpress')]);
+                    return;
+                }
+            }
+
+            $result = $this->api_client->delete_video_from_s3($video_id);
+            if (is_wp_error($result)) {
+                wp_send_json_error(['message' => __('Failed to delete video from storage', 'vodpress')]);
+                return;
+            }
+        }
+
+        // Delete from database
         $result = $wpdb->delete($table_name, ['id' => $video_id]);
         
         if ($result === false) {
@@ -600,6 +625,52 @@ class VODPressAPIClient {
                         'current_video_id' => $data->current_video_id ?? null
                     ]);
                 }
+
+                if ($response_code !== 200) {
+                    throw new Exception("Server returned status code: $response_code");
+                }
+
+                return $data;
+
+            } catch (Exception $e) {
+                $attempt++;
+                if ($attempt >= $this->max_retries) {
+                    return new WP_Error('api_error', $e->getMessage());
+                }
+                sleep(2 * $attempt);
+            }
+        }
+    }
+
+    /**
+     * Send request to delete video from S3
+     * @param int $video_id The ID of the video to delete
+     * @return WP_Error|object
+     */
+    public function delete_video_from_s3(int $video_id) {
+        $attempt = 0;
+        while ($attempt < $this->max_retries) {
+            try {
+                $request_data = [
+                    'video_id' => $video_id
+                ];
+
+                $response = wp_remote_post($this->server_url . '/api/delete', [
+                    'headers' => [
+                        'X-API-Key-Hash' => $this->generate_api_key_hash($this->api_key),
+                        'Content-Type' => 'application/json',
+                    ],
+                    'body' => wp_json_encode($request_data),
+                    'timeout' => $this->timeout,
+                ]);
+
+                if (is_wp_error($response)) {
+                    throw new Exception($response->get_error_message());
+                }
+
+                $response_code = wp_remote_retrieve_response_code($response);
+                $body = wp_remote_retrieve_body($response);
+                $data = json_decode($body);
 
                 if ($response_code !== 200) {
                     throw new Exception("Server returned status code: $response_code");

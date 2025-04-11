@@ -112,6 +112,7 @@ class VODPress {
             'i18n' => [
                 'submitError' => __('Failed to submit video', 'vodpress'),
                 'submitSuccess' => __('Video submitted successfully!', 'vodpress'),
+                'queuedAt' => __('Video was added to the queue at position #', 'vodpress'),
             ],
             'pluginUrl' => plugins_url('', __FILE__),
         ]);
@@ -254,6 +255,7 @@ class VODPress {
     private function get_status_label(string $status): string {
         $labels = [
             'pending' => __('Pending', 'vodpress'),
+            'queued' => __('In Queue', 'vodpress'),
             'downloading' => __('Downloading', 'vodpress'),
             'converting' => __('Converting to HLS', 'vodpress'),
             'uploading' => __('Uploading to S3', 'vodpress'),
@@ -346,6 +348,18 @@ class VODPress {
             $wpdb->update($table_name, ['status' => 'failed', 'error_message' => $result->get_error_message(), 'updated_at' => current_time('mysql')], ['id' => $video_id]);
             return $result;
         }
+
+        // Update record based on API response
+        $update_data = ['updated_at' => current_time('mysql')];
+        
+        // Check if this video is being processed immediately or added to queue
+        if (!empty($result->currently_processing) && $result->currently_processing == $video_id) {
+            $update_data['status'] = 'downloading';
+        } elseif (isset($result->queue_position)) {
+            $update_data['status'] = 'queued';
+        }
+        
+        $wpdb->update($table_name, $update_data, ['id' => $video_id]);
 
         return $result;
     }
@@ -494,21 +508,40 @@ class VODPress {
             wp_send_json_error(['message' => __('Video not found', 'vodpress')]);
         }
 
-        // Delete from S3 if video has been converted
+        if (!$this->api_client) {
+            if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
+                $this->api_client = new VODPressAPIClient(VODPRESS_API_KEY, get_option('vodpress_server_url'));
+            } else {
+                wp_send_json_error(['message' => __('Plugin not properly configured', 'vodpress')]);
+                return;
+            }
+        }
+
+        $processing_error = false;
+
+        // Always try to remove from queue first (unless it's completed or already failed)
+        if ($video->status !== 'completed' && $video->status !== 'failed') {
+            $remove_result = $this->api_client->remove_from_queue($video_id);
+            
+            // Check if the video is currently processing
+            if (is_wp_error($remove_result) && $remove_result->get_error_code() === 'video_processing') {
+                wp_send_json_error(['message' => $remove_result->get_error_message()]);
+                return;
+            }
+        }
+        
+        // If video is completed, also try to delete from S3
         if ($video->status === 'completed' && $video->conversion_url) {
-            if (!$this->api_client) {
-                if (defined('VODPRESS_API_KEY') && get_option('vodpress_server_url')) {
-                    $this->api_client = new VODPressAPIClient(VODPRESS_API_KEY, get_option('vodpress_server_url'));
-                } else {
-                    wp_send_json_error(['message' => __('Plugin not properly configured', 'vodpress')]);
+            $delete_result = $this->api_client->delete_video_from_s3($video_id);
+            
+            if (is_wp_error($delete_result)) {
+                // If video is being processed, don't delete from database
+                if ($delete_result->get_error_code() === 'video_processing') {
+                    wp_send_json_error(['message' => $delete_result->get_error_message()]);
                     return;
                 }
-            }
-
-            $result = $this->api_client->delete_video_from_s3($video_id);
-            if (is_wp_error($result)) {
-                wp_send_json_error(['message' => __('Failed to delete video from storage', 'vodpress')]);
-                return;
+                // Otherwise note the error but continue with database deletion
+                $processing_error = true;
             }
         }
 
@@ -516,10 +549,14 @@ class VODPress {
         $result = $wpdb->delete($table_name, ['id' => $video_id]);
         
         if ($result === false) {
-            wp_send_json_error(['message' => __('Failed to delete video', 'vodpress')]);
+            wp_send_json_error(['message' => __('Failed to delete video from database', 'vodpress')]);
         }
         
-        wp_send_json_success(['message' => __('Video deleted successfully', 'vodpress')]);
+        if ($processing_error) {
+            wp_send_json_success(['message' => __('Video removed from database but there was an error deleting converted files', 'vodpress')]);
+        } else {
+            wp_send_json_success(['message' => __('Video deleted successfully', 'vodpress')]);
+        }
     }
 
     
@@ -618,14 +655,6 @@ class VODPressAPIClient {
                 $body = wp_remote_retrieve_body($response);
                 $data = json_decode($body);
 
-                if ($response_code === 429) {
-                    return new WP_Error('processing_conflict', $data->error ?? __('Another video is being processed', 'vodpress'), [
-                        'status' => 429,
-                        'retry_after' => $data->retry_after ?? 300,
-                        'current_video_id' => $data->current_video_id ?? null
-                    ]);
-                }
-
                 if ($response_code !== 200) {
                     throw new Exception("Server returned status code: $response_code");
                 }
@@ -639,6 +668,88 @@ class VODPressAPIClient {
                 }
                 sleep(2 * $attempt);
             }
+        }
+    }
+
+    /**
+     * Remove a video from the processing queue
+     * @param int $video_id The ID of the video to remove from queue
+     * @return WP_Error|object
+     */
+    public function remove_from_queue(int $video_id) {
+        try {
+            $request_data = [
+                'video_id' => $video_id
+            ];
+
+            $response = wp_remote_post($this->server_url . '/api/remove-from-queue', [
+                'headers' => [
+                    'X-API-Key-Hash' => $this->generate_api_key_hash($this->api_key),
+                    'Content-Type' => 'application/json',
+                ],
+                'body' => wp_json_encode($request_data),
+                'timeout' => $this->timeout,
+            ]);
+
+            if (is_wp_error($response)) {
+                return $response;
+            }
+
+            $response_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body);
+
+            // If endpoint doesn't exist yet, don't consider it an error
+            if ($response_code === 404) {
+                return (object) ['success' => false, 'error' => 'Queue management not supported by server'];
+            }
+
+            // If video is being processed, return special error
+            if ($response_code === 409 && isset($data->is_processing) && $data->is_processing) {
+                return new WP_Error('video_processing', __('Video is currently being processed and cannot be removed from queue', 'vodpress'), [
+                    'is_processing' => true 
+                ]);
+            }
+
+            if ($response_code !== 200) {
+                return new WP_Error('api_error', "Server returned status code: $response_code");
+            }
+
+            return $data;
+        } catch (Exception $e) {
+            return new WP_Error('api_error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Get queue status from conversion server
+     * @return WP_Error|object
+     */
+    public function get_queue_status() {
+        try {
+            $response = wp_remote_get($this->server_url . '/api/queue-status', [
+                'headers' => [
+                    'X-API-Key-Hash' => $this->generate_api_key_hash($this->api_key),
+                    'Content-Type' => 'application/json',
+                ],
+                'timeout' => $this->timeout,
+            ]);
+
+            if (is_wp_error($response)) {
+                return $response;
+            }
+
+            $response_code = wp_remote_retrieve_response_code($response);
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body);
+
+            if ($response_code !== 200) {
+                return new WP_Error('api_error', "Server returned status code: $response_code");
+            }
+
+            return $data;
+        } catch (Exception $e) {
+            return new WP_Error('api_error', $e->getMessage());
         }
     }
 
@@ -671,6 +782,11 @@ class VODPressAPIClient {
                 $response_code = wp_remote_retrieve_response_code($response);
                 $body = wp_remote_retrieve_body($response);
                 $data = json_decode($body);
+
+                // If video is being processed, return special error
+                if ($response_code === 409 && isset($data->is_processing) && $data->is_processing) {
+                    return new WP_Error('video_processing', __('Video is currently being processed and cannot be deleted', 'vodpress'));
+                }
 
                 if ($response_code !== 200) {
                     throw new Exception("Server returned status code: $response_code");

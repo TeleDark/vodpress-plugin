@@ -21,15 +21,18 @@ jQuery(document).ready(function ($) {
                 video_title: $form.find('#video_title').val()
             },
             success: function (response) {
-                $status.html(
-                    response.success
-                        ? '<div class="notice notice-success"><p>' + vodpress.i18n.submitSuccess + '</p></div>'
-                        : '<div class="notice notice-error"><p>' + (response.data.message || vodpress.i18n.submitError) + '</p></div>'
-                );
                 if (response.success) {
+                    let successMessage = vodpress.i18n.submitSuccess;
+                    // Add queue position information if available
+                    if (response.data && response.data.queue_position > 1) {
+                        successMessage += ' ' + (vodpress.i18n.queuedAt || 'Video was added to the queue at position #') + response.data.queue_position;
+                    }
+                    $status.html('<div class="notice notice-success"><p>' + successMessage + '</p></div>');
                     $form.find('#video_url').val('');
                     $form.find('#video_title').val('');
                     setTimeout(function () { $status.empty(); updateVideosStatus(); }, 2000);
+                } else {
+                    $status.html('<div class="notice notice-error"><p>' + (response.data.message || vodpress.i18n.submitError) + '</p></div>');
                 }
             },
             error: function () {

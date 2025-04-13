@@ -235,15 +235,15 @@ class VODPress {
             
             <table class="wp-list-table widefat fixed striped">
                 <thead>
-                    <tr>
-                        <th><?php _e('ID', 'vodpress'); ?></th>
-                        <th><?php _e('Title', 'vodpress'); ?></th>
+                   <tr>
+                        <th class="v-id-column"><?php _e('ID', 'vodpress'); ?></th>
+                        <th class="v-title-column"><?php _e('Title', 'vodpress'); ?></th>
                         <th><?php _e('Video URL', 'vodpress'); ?></th>
-                        <th><?php _e('Status', 'vodpress'); ?></th>
-                        <th><?php _e('Created At', 'vodpress'); ?></th>
-                        <th><?php _e('Last Update', 'vodpress'); ?></th>
-                        <th><?php _e('Conversion URL', 'vodpress'); ?></th>
-                        <th><?php _e('Actions', 'vodpress'); ?></th>
+                        <th class="status-column"><?php _e('Status', 'vodpress'); ?></th>
+                        <th class="date-column"><?php _e('Created At', 'vodpress'); ?></th>
+                        <th class="date-column"><?php _e('Last Update', 'vodpress'); ?></th>
+                        <th class="conversion-colum"><?php _e('Conversion URL', 'vodpress'); ?></th>
+                        <th class="v-action-column"><?php _e('Actions', 'vodpress'); ?></th>
                     </tr>
                 </thead>
                 <tbody></tbody>

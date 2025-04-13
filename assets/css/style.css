@@ -209,6 +209,21 @@ video
     vertical-align: middle;
     padding: 8px;
 }
+.v-id-column {
+    width: 5%;
+}
+
+.v-title-column {
+    width: 20%;
+}
+
+.status-column {
+    width: 10%;
+}
+
+.v-action-column {
+    width: 10%;
+}
 
 /* Search Section */
 .tablenav.top {
@@ -232,7 +247,6 @@ video
     max-width: 300px;
 }
 
-/* استایل‌های پاسخگو برای موبایل */
 @media (max-width: 768px) {
     .tablenav.top {
         flex-direction: column;

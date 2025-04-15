@@ -266,7 +266,8 @@ class VODPress {
     }
 
     private function format_date(string $date): string {
-        return wp_date('Y/m/d H:i', strtotime($date));
+        $dt = new DateTime($date);
+        return $dt->format('Y/m/d H:i');
     }
 
     public function ajax_submit_video(): void {

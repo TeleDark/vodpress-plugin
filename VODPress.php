@@ -240,6 +240,7 @@ class VODPress {
                         <th class="v-title-column"><?php _e('Title', 'vodpress'); ?></th>
                         <th><?php _e('Video URL', 'vodpress'); ?></th>
                         <th class="status-column"><?php _e('Status', 'vodpress'); ?></th>
+                        <th class="duration-column"><?php _e('Duration', 'vodpress'); ?></th>
                         <th class="date-column"><?php _e('Created At', 'vodpress'); ?></th>
                         <th class="date-column"><?php _e('Last Update', 'vodpress'); ?></th>
                         <th class="conversion-colum"><?php _e('Conversion URL', 'vodpress'); ?></th>
@@ -268,6 +269,22 @@ class VODPress {
     private function format_date(string $date): string {
         $dt = new DateTime($date);
         return $dt->format('Y/m/d H:i');
+    }
+
+    private function format_duration(int $seconds): string {
+        if ($seconds <= 0) {
+            return '-';
+        }
+
+        $hours = floor($seconds / 3600);
+        $minutes = floor(($seconds % 3600) / 60);
+        $secs = $seconds % 60;
+
+        if ($hours > 0) {
+            return sprintf('%02d:%02d:%02d', $hours, $minutes, $secs);
+        } else {
+            return sprintf('%02d:%02d', $minutes, $secs);
+        }
     }
 
     public function ajax_submit_video(): void {
@@ -409,6 +426,7 @@ class VODPress {
                 'video_url' => $video->video_url,
                 'status' => $video->status,
                 'status_label' => $this->get_status_label($video->status),
+                'duration_formatted' => $this->format_duration($video->duration),
                 'created_at' => $this->format_date($video->created_at),
                 'updated_at' => $this->format_date($video->updated_at),
                 'conversion_url' => $video->conversion_url,
@@ -574,6 +592,7 @@ class VODPress {
         $video_id = $params['video_id'] ?? null;
         $status = $params['status'] ?? null;
         $conversion_url = $params['conversion_url'] ?? null;
+        $duration = isset($params['duration']) ? intval($params['duration']) : null;
 
         if (!$video_id || !$status) {
             return new WP_Error('invalid_params', __('Invalid parameters', 'vodpress'));
@@ -602,6 +621,11 @@ class VODPress {
 
         if ($status === 'failed' && isset($params['error'])) {
             $update_data['error_message'] = sanitize_text_field($params['error']);
+        }
+
+        // Update duration if provided
+        if ($duration !== null) {
+            $update_data['duration'] = $duration;
         }
 
         $wpdb->update($table_name, $update_data, ['id' => $video_id]);
@@ -818,6 +842,7 @@ register_activation_hook(__FILE__, function() {
         status varchar(50) NOT NULL DEFAULT 'pending',
         conversion_url text,
         error_message text,
+        duration int DEFAULT 0,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY  (id)

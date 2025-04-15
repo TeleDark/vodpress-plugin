@@ -82,7 +82,7 @@ jQuery(document).ready(function ($) {
         $tbody.empty();
 
         if (!videos || videos.length === 0) {
-            $tbody.append('<tr><td colspan="8">No videos found.</td></tr>');
+            $tbody.append('<tr><td colspan="9">No videos found.</td></tr>');
             return;
         }
 
@@ -114,6 +114,7 @@ jQuery(document).ready(function ($) {
                 '<td>' + video.title + '</td>' +
                 '<td>' + videoUrlDisplay + '</td>' +
                 '<td><span class="vodpress-status-' + video.status + '">' + video.status_label + '</span>' + errorMessage + '</td>' +
+                '<td>' + (video.duration_formatted || '-') + '</td>' +
                 '<td>' + video.created_at + '</td>' +
                 '<td>' + video.updated_at + '</td>' +
                 '<td>' + conversionUrlColumn + '</td>' +

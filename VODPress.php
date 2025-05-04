@@ -411,7 +411,7 @@ class VODPress
         }
 
         $response_code = wp_remote_retrieve_response_code($response);
-        if (!in_array($response_code, [200, 206, 302, 301])) {
+        if (!in_array($response_code, [200, 206, 301, 302, 303])) {
             return new WP_Error('url_not_accessible', sprintf(__('Video URL returned HTTP error: %d', 'vodpress'), $response_code));
         }
 

@@ -18,6 +18,7 @@
 
 .vodpress-status-downloading,
 .vodpress-status-converting,
+.vodpress-status-uploading-original,
 .vodpress-status-uploading {
     color: #0073aa;
     font-weight: bold;

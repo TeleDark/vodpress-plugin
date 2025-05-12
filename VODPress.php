@@ -3,7 +3,7 @@
 /**
  * Plugin Name: VODPress
  * Description: Convert and manage your videos with HLS streaming support
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Morteza Mohammadnezhad
  * License: GPL v2 or later
  * Text Domain: vodpress
@@ -256,6 +256,7 @@ class VODPress
                         <th class="date-column"><?php _e('Created At', 'vodpress'); ?></th>
                         <th class="date-column"><?php _e('Last Update', 'vodpress'); ?></th>
                         <th class="conversion-colum"><?php _e('Conversion URL', 'vodpress'); ?></th>
+                        <th class="original_url"><?php _e('Original Video URL', 'vodpress'); ?></th>
                         <th class="v-action-column"><?php _e('Actions', 'vodpress'); ?></th>
                     </tr>
                 </thead>
@@ -271,6 +272,7 @@ class VODPress
             'pending' => __('Pending', 'vodpress'),
             'queued' => __('In Queue', 'vodpress'),
             'downloading' => __('Downloading', 'vodpress'),
+            'uploading-original' => __('Uploading Original Video', 'vodpress'),
             'converting' => __('Converting to HLS', 'vodpress'),
             'uploading' => __('Uploading to S3', 'vodpress'),
             'completed' => __('Completed', 'vodpress'),
@@ -449,6 +451,7 @@ class VODPress
                 'created_at' => $this->format_date($video->created_at),
                 'updated_at' => $this->format_date($video->updated_at),
                 'conversion_url' => $video->conversion_url,
+                'original_url' => $video->original_url,
                 'error_message' => $video->error_message
             ];
         }
@@ -615,6 +618,7 @@ class VODPress
         $video_id = $params['video_id'] ?? null;
         $status = $params['status'] ?? null;
         $conversion_url = $params['conversion_url'] ?? null;
+        $original_url = $params['original_url'] ?? null;
         $duration = isset($params['duration']) ? intval($params['duration']) : null;
 
         if (!$video_id || !$status) {
@@ -639,6 +643,20 @@ class VODPress
                 }
             } else {
                 $update_data['conversion_url'] = $conversion_url;
+            }
+        }
+
+        if ($original_url && is_string($original_url)) {
+            $public_url_base = get_option('vodpress_public_url_base');
+            if ($public_url_base) {
+                $path = parse_url($original_url, PHP_URL_PATH);
+                if ($path !== false) {
+                    $update_data['original_url'] = rtrim($public_url_base, '/') . $path;
+                } else {
+                    $update_data['original_url'] = $original_url;
+                }
+            } else {
+                $update_data['original_url'] = $original_url;
             }
         }
 
@@ -687,7 +705,8 @@ class VODPressAPIClient
                     'video_id' => $video_id,
                     'callback_url' => get_rest_url(null, 'vodpress/v1/callback'),
                     'site_url' => get_site_url(),
-                    'public_url_base' => get_option('vodpress_public_url_base')
+                    'public_url_base' => get_option('vodpress_public_url_base'),
+                    'upload_original' => true
                 ];
 
                 $response = wp_remote_post($this->server_url . '/api/convert', [
@@ -869,6 +888,7 @@ register_activation_hook(__FILE__, function () {
         title varchar(255) DEFAULT '',
         status varchar(50) NOT NULL DEFAULT 'pending',
         conversion_url text,
+        original_url text,
         error_message text,
         duration int DEFAULT 0,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,

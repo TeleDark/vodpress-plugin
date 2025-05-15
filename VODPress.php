@@ -367,7 +367,11 @@ class VODPress
         global $wpdb;
         $table_name = $wpdb->prefix . 'vodpress_videos';
 
+        // Generate UUID for this video
+        $uuid = wp_generate_uuid4();
+
         $wpdb->insert($table_name, [
+            'uuid' => $uuid,
             'video_url' => $video_url,
             'title' => $video_title,
             'status' => 'pending',
@@ -380,7 +384,7 @@ class VODPress
             return new WP_Error('db_error', __('Failed to create video record', 'vodpress'));
         }
 
-        $result = $this->api_client->send_video_request($video_url, $video_id);
+        $result = $this->api_client->send_video_request($video_url, $uuid);
         if (is_wp_error($result)) {
             $wpdb->update($table_name, ['status' => 'failed', 'error_message' => $result->get_error_message(), 'updated_at' => current_time('mysql')], ['id' => $video_id]);
             return $result;
@@ -390,7 +394,7 @@ class VODPress
         $update_data = ['updated_at' => current_time('mysql')];
 
         // Check if this video is being processed immediately or added to queue
-        if (!empty($result->currently_processing) && $result->currently_processing == $video_id) {
+        if (!empty($result->currently_processing) && $result->currently_processing == $uuid) {
             $update_data['status'] = 'downloading';
         } elseif (isset($result->queue_position)) {
             $update_data['status'] = 'queued';
@@ -516,8 +520,8 @@ class VODPress
             ['id' => $video->id]
         );
 
-        // Send the request with the existing video ID
-        $result = $this->api_client->send_video_request($video->video_url, $video->id);
+        // Send the request with the UUID
+        $result = $this->api_client->send_video_request($video->video_url, $video->uuid);
         if (is_wp_error($result)) {
             $wpdb->update(
                 $table_name,
@@ -565,7 +569,7 @@ class VODPress
 
         // Always try to remove from queue first (unless it's completed or already failed)
         if ($video->status !== 'completed' && $video->status !== 'failed') {
-            $remove_result = $this->api_client->remove_from_queue($video_id);
+            $remove_result = $this->api_client->remove_from_queue($video->uuid);
 
             // Check if the video is currently processing
             if (is_wp_error($remove_result) && $remove_result->get_error_code() === 'video_processing') {
@@ -576,7 +580,7 @@ class VODPress
 
         // If video is completed, also try to delete from S3
         if ($video->status === 'completed' && $video->conversion_url) {
-            $delete_result = $this->api_client->delete_video_from_s3($video_id);
+            $delete_result = $this->api_client->delete_video_from_s3($video->uuid);
 
             if (is_wp_error($delete_result)) {
                 // If video is being processed, don't delete from database
@@ -615,13 +619,13 @@ class VODPress
         }
 
         $params = $request->get_json_params();
-        $video_id = $params['video_id'] ?? null;
+        $video_uuid = $params['video_uuid'] ?? null;
         $status = $params['status'] ?? null;
         $conversion_url = $params['conversion_url'] ?? null;
         $original_url = $params['original_url'] ?? null;
         $duration = isset($params['duration']) ? intval($params['duration']) : null;
 
-        if (!$video_id || !$status) {
+        if (!$video_uuid || !$status) {
             return new WP_Error('invalid_params', __('Invalid parameters', 'vodpress'));
         }
 
@@ -669,7 +673,7 @@ class VODPress
             $update_data['duration'] = $duration;
         }
 
-        $wpdb->update($table_name, $update_data, ['id' => $video_id]);
+        $wpdb->update($table_name, $update_data, ['uuid' => $video_uuid]);
         return ['success' => true];
     }
 }
@@ -695,14 +699,14 @@ class VODPressAPIClient
     /**
      * @return WP_Error|object
      */
-    public function send_video_request(string $video_url, int $video_id)
+    public function send_video_request(string $video_url, string $uuid)
     {
         $attempt = 0;
         while ($attempt < $this->max_retries) {
             try {
                 $request_data = [
                     'video_url' => $video_url,
-                    'video_id' => $video_id,
+                    'video_uuid' => $uuid,
                     'callback_url' => get_rest_url(null, 'vodpress/v1/callback'),
                     'site_url' => get_site_url(),
                     'public_url_base' => get_option('vodpress_public_url_base'),
@@ -743,14 +747,14 @@ class VODPressAPIClient
 
     /**
      * Remove a video from the processing queue
-     * @param int $video_id The ID of the video to remove from queue
+     * @param string $uuid The UUID of the video to remove from queue
      * @return WP_Error|object
      */
-    public function remove_from_queue(int $video_id)
+    public function remove_from_queue(string $uuid)
     {
         try {
             $request_data = [
-                'video_id' => $video_id
+                'video_uuid' => $uuid
             ];
 
             $response = wp_remote_post($this->server_url . '/api/remove-from-queue', [
@@ -827,16 +831,16 @@ class VODPressAPIClient
 
     /**
      * Send request to delete video from S3
-     * @param int $video_id The ID of the video to delete
+     * @param string $uuid The UUID of the video to delete
      * @return WP_Error|object
      */
-    public function delete_video_from_s3(int $video_id)
+    public function delete_video_from_s3(string $uuid)
     {
         $attempt = 0;
         while ($attempt < $this->max_retries) {
             try {
                 $request_data = [
-                    'video_id' => $video_id
+                    'video_uuid' => $uuid
                 ];
 
                 $response = wp_remote_post($this->server_url . '/api/delete', [
@@ -884,6 +888,7 @@ register_activation_hook(__FILE__, function () {
 
     $sql = "CREATE TABLE IF NOT EXISTS $table_name (
         id bigint(20) NOT NULL AUTO_INCREMENT,
+        uuid varchar(36) DEFAULT NULL,
         video_url text NOT NULL,
         title varchar(255) DEFAULT '',
         status varchar(50) NOT NULL DEFAULT 'pending',
@@ -893,11 +898,25 @@ register_activation_hook(__FILE__, function () {
         duration int DEFAULT 0,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY  (id)
+        PRIMARY KEY  (id),
+        UNIQUE KEY uuid (uuid)
     ) $charset_collate;";
 
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
     dbDelta($sql);
+    
+    // Check if uuid column exists, if not add it to existing table
+    $row = $wpdb->get_results("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$table_name}' AND COLUMN_NAME = 'uuid'");
+    if (empty($row)) {
+        $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN uuid varchar(36) DEFAULT NULL, ADD UNIQUE KEY uuid (uuid)");
+    }
+    
+    // Generate UUIDs for existing records that don't have one
+    $videos = $wpdb->get_results("SELECT id FROM {$table_name} WHERE uuid IS NULL OR uuid = ''");
+    foreach ($videos as $video) {
+        $uuid = wp_generate_uuid4();
+        $wpdb->update($table_name, ['uuid' => $uuid], ['id' => $video->id]);
+    }
 });
 
 add_action('plugins_loaded', function () {
